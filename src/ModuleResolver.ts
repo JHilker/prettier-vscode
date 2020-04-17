@@ -8,7 +8,7 @@ import * as prettier from "prettier";
 import * as resolve from "resolve";
 import * as semver from "semver";
 // tslint:disable-next-line: no-implicit-dependencies
-import { Disposable, workspace, Uri } from "vscode";
+import { Disposable, Uri } from "vscode";
 import { resolveGlobalNodePath, resolveGlobalYarnPath } from "./Files";
 import { LoggingService } from "./LoggingService";
 import { FAILED_TO_LOAD_MODULE_MESSAGE } from "./message";
@@ -163,6 +163,7 @@ export class ModuleResolver implements Disposable {
   private disposeRequire(r: NodeRequire, mod: any) {
     this.loggingService.logInfo(`Removing module cache: ${mod.id}`);
     delete r.cache[r.resolve(mod.id)];
+    // Also remove cache entries for children of this module
     mod.children.forEach((modChild: any) => {
       this.disposeRequire(r, modChild);
     });
@@ -177,7 +178,6 @@ export class ModuleResolver implements Disposable {
       const mod: any = r.cache[r.resolve(modulePath)];
       mod?.exports?.clearConfigCache();
       this.disposeRequire(r, mod);
-      // delete r.cache[r.resolve(modulePath)];
       this.loggingService.logInfo(`Removing module cache: ${modulePath}`);
     } catch (error) {
       this.loggingService.logError("Error clearing module cache.", error);
@@ -257,23 +257,7 @@ export class ModuleResolver implements Disposable {
             .on("unlink", listenerCallback(modulePath, "unlink"))
             .on("unlinkDir", listenerCallback(modulePath, "unlinkDir"));
 
-          // const moduleWatcher = workspace.createFileSystemWatcher(
-          //   path.dirname(modulePath)
-          // );
-          // moduleWatcher.onDidChange((e) => {
-          //   this.loggingService.logInfo(`Change detected in ${e}`);
-          // });
-          // moduleWatcher.onDidDelete((e) => {
-          //   this.loggingService.logInfo(`Delete detected in ${e}`);
-          // });
-
-          // this.loggingService.logInfo(
-          //   `Setting resolvedModules for ${path.dirname(modulePath)}`
-          // );
           this.resolvedModules.set(modulePath, moduleWatcher);
-          // throw new Error(
-          //   "Somehow we never get here? How is it being set in resolvedModules?"
-          // );
         }
         this.loggingService.logInfo(
           `Loaded module '${pkgName}@${
@@ -323,13 +307,8 @@ export class ModuleResolver implements Disposable {
       try {
         if (fs.existsSync(modulePath)) {
           const moduleInstance = this.loadNodeModule(modulePath);
-          this.loggingService.logInfo(`WHY ARE WE IN GLOBAL?`);
           if (!this.resolvedModules.has(modulePath)) {
-            const moduleWatcher = workspace.createFileSystemWatcher(modulePath);
-            moduleWatcher.onDidChange((e) => {
-              this.loggingService.logInfo(`Change detected in ${e}`);
-            });
-
+            // TODO: Handle GlobalPkg similar to how to handle LocalPkg
             // this.resolvedModules.set(modulePath, moduleWatcher);
           }
           this.loggingService.logInfo(
