@@ -36,6 +36,7 @@ const config = {
     /* cspell: disable-next-line */
     "spdx-license-ids/deprecated": "spdx-license-ids/deprecated",
     "applicationinsights-native-metrics": "applicationinsights-native-metrics", // This isn't actually used, it is just to disable a webpack error we don't care about.
+    fsevents: "require('fsevents')",
   },
   resolve: {
     extensions: [".ts", ".js"],

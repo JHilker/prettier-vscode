@@ -3,7 +3,7 @@ import {
   ExtensionContext,
   // tslint:disable-next-line: no-implicit-dependencies
 } from "vscode";
-import { createConfigFile } from "./commands";
+import { createConfigFile, resetModuleCache } from "./commands";
 import { ConfigResolver } from "./ConfigResolver";
 import { IgnorerResolver } from "./IgnorerResolver";
 import { LanguageResolver } from "./LanguageResolver";
@@ -46,6 +46,12 @@ export function activate(context: ExtensionContext) {
     notificationService
   );
 
+  const resetModuleCacheFunc = resetModuleCache(loggingService, moduleResolver);
+  const resetModuleCacheCommand = commands.registerCommand(
+    "prettier.resetModuleCache",
+    resetModuleCacheFunc
+  );
+
   const languageResolver = new LanguageResolver(moduleResolver);
 
   const statusBarService = new StatusBarService(
@@ -68,6 +74,7 @@ export function activate(context: ExtensionContext) {
     editService,
     createConfigFileCommand,
     openOutputCommand,
+    resetModuleCacheCommand,
     ...editService.registerDisposables(),
     ...statusBarService.registerDisposables()
   );

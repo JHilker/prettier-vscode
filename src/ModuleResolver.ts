@@ -1,4 +1,5 @@
 import { execSync } from "child_process";
+import * as chokidar from "chokidar";
 import * as findUp from "find-up";
 import * as fs from "fs";
 import * as mem from "mem";
@@ -7,7 +8,7 @@ import * as prettier from "prettier";
 import * as resolve from "resolve";
 import * as semver from "semver";
 // tslint:disable-next-line: no-implicit-dependencies
-import { Disposable, Uri } from "vscode";
+import { Disposable, workspace, Uri } from "vscode";
 import { resolveGlobalNodePath, resolveGlobalYarnPath } from "./Files";
 import { LoggingService } from "./LoggingService";
 import { FAILED_TO_LOAD_MODULE_MESSAGE } from "./message";
@@ -65,7 +66,7 @@ function globalPathGet(packageManager: PackageManagers): string | undefined {
 
 export class ModuleResolver implements Disposable {
   private findPkgMem: (fsPath: string, pkgName: string) => string | undefined;
-  private resolvedModules = new Array<string>();
+  private resolvedModules = new Map<string, chokidar.FSWatcher>();
 
   constructor(
     private loggingService: LoggingService,
@@ -159,24 +160,41 @@ export class ModuleResolver implements Disposable {
     return moduleInstance;
   }
 
+  private disposeRequire(r: NodeRequire, mod: any) {
+    this.loggingService.logInfo(`Removing module cache: ${mod.id}`);
+    delete r.cache[r.resolve(mod.id)];
+    mod.children.forEach((modChild: any) => {
+      this.disposeRequire(r, modChild);
+    });
+  }
+
+  private disposeModuleCache(modulePath: string) {
+    const r =
+      typeof __webpack_require__ === "function"
+        ? __non_webpack_require__
+        : require;
+    try {
+      const mod: any = r.cache[r.resolve(modulePath)];
+      mod?.exports?.clearConfigCache();
+      this.disposeRequire(r, mod);
+      // delete r.cache[r.resolve(modulePath)];
+      this.loggingService.logInfo(`Removing module cache: ${modulePath}`);
+    } catch (error) {
+      this.loggingService.logError("Error clearing module cache.", error);
+    }
+  }
+
   /**
    * Clears the module and config cache
    */
   public dispose() {
     this.getPrettierInstance().clearConfigCache();
-    this.resolvedModules.forEach((modulePath) => {
-      const r =
-        typeof __webpack_require__ === "function"
-          ? __non_webpack_require__
-          : require;
-      try {
-        const mod: any = r.cache[r.resolve(modulePath)];
-        mod?.exports?.clearConfigCache();
-        delete r.cache[r.resolve(modulePath)];
-      } catch (error) {
-        this.loggingService.logError("Error clearing module cache.", error);
-      }
+    this.resolvedModules.forEach((fileWatcher, modulePath) => {
+      this.disposeModuleCache(modulePath);
+      fileWatcher.close();
     });
+    this.resolvedModules.clear();
+    mem.clear(this.findPkgMem);
   }
 
   /**
@@ -203,8 +221,59 @@ export class ModuleResolver implements Disposable {
 
       if (modulePath !== undefined) {
         const moduleInstance = this.loadNodeModule(modulePath);
-        if (this.resolvedModules.indexOf(modulePath) === -1) {
-          this.resolvedModules.push(modulePath);
+        this.loggingService.logInfo("resolvedModules:");
+        this.resolvedModules.forEach((value, key) => {
+          this.loggingService.logInfo(`key: ${key}`);
+        });
+
+        if (!this.resolvedModules.has(modulePath)) {
+          this.loggingService.logInfo(
+            `Creating watcher for ${path.dirname(modulePath)}`
+          );
+          // const moduleWatcher = chokidar.watch(modulePath);
+          const moduleWatcher = chokidar.watch(
+            [modulePath, path.dirname(modulePath)],
+            {
+              disableGlobbing: true,
+            }
+          );
+          const listenerCallback = (
+            listenerModulePath: string,
+            eventName: string
+          ) => (filePath: string) => {
+            this.loggingService.logInfo(
+              `Detected a ${eventName} event on ${filePath}; Removing ${listenerModulePath} from cache`
+            );
+            this.disposeModuleCache(listenerModulePath);
+            this.resolvedModules.get(listenerModulePath)?.close();
+            this.resolvedModules.delete(listenerModulePath);
+            mem.clear(this.findPkgMem);
+          };
+          this.loggingService.logInfo(
+            `Listening to ${Object.keys(moduleWatcher.getWatched()).join(", ")}`
+          );
+          moduleWatcher
+            .on("change", listenerCallback(modulePath, "change"))
+            .on("unlink", listenerCallback(modulePath, "unlink"))
+            .on("unlinkDir", listenerCallback(modulePath, "unlinkDir"));
+
+          // const moduleWatcher = workspace.createFileSystemWatcher(
+          //   path.dirname(modulePath)
+          // );
+          // moduleWatcher.onDidChange((e) => {
+          //   this.loggingService.logInfo(`Change detected in ${e}`);
+          // });
+          // moduleWatcher.onDidDelete((e) => {
+          //   this.loggingService.logInfo(`Delete detected in ${e}`);
+          // });
+
+          // this.loggingService.logInfo(
+          //   `Setting resolvedModules for ${path.dirname(modulePath)}`
+          // );
+          this.resolvedModules.set(modulePath, moduleWatcher);
+          // throw new Error(
+          //   "Somehow we never get here? How is it being set in resolvedModules?"
+          // );
         }
         this.loggingService.logInfo(
           `Loaded module '${pkgName}@${
@@ -254,8 +323,14 @@ export class ModuleResolver implements Disposable {
       try {
         if (fs.existsSync(modulePath)) {
           const moduleInstance = this.loadNodeModule(modulePath);
-          if (this.resolvedModules.indexOf(modulePath) === -1) {
-            this.resolvedModules.push(modulePath);
+          this.loggingService.logInfo(`WHY ARE WE IN GLOBAL?`);
+          if (!this.resolvedModules.has(modulePath)) {
+            const moduleWatcher = workspace.createFileSystemWatcher(modulePath);
+            moduleWatcher.onDidChange((e) => {
+              this.loggingService.logInfo(`Change detected in ${e}`);
+            });
+
+            // this.resolvedModules.set(modulePath, moduleWatcher);
           }
           this.loggingService.logInfo(
             `Loaded module '${pkgName}@${
@@ -282,6 +357,9 @@ export class ModuleResolver implements Disposable {
         ? __non_webpack_require__
         : require;
     try {
+      this.loggingService.logInfo("Require Cache");
+      this.loggingService.logInfo(Object.keys(r.cache).join("\n"));
+      this.loggingService.logInfo(`Loading ${moduleName}`);
       return r(moduleName);
     } catch (error) {
       this.loggingService.logError(

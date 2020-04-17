@@ -114,6 +114,7 @@
     "webpack-cli": "^3.3.11"
   },
   "dependencies": {
+    "chokidar": "^3.3.1",
     "find-up": "^4.1.0",
     "ignore": "^5.1.4",
     "mem": "^6.1.0",
@@ -364,6 +365,10 @@
       {
         "command": "prettier.createConfigFile",
         "title": "%ext.command.createConfigFile.title%"
+      },
+      {
+        "command": "prettier.resetModuleCache",
+        "title": "%ext.command.resetModuleCache.title%"
       }
     ]
   }
